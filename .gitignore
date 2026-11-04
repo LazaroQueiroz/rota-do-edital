@@ -1,0 +1,11 @@
+# banco e backups do usuário
+dados/
+*.db
+*.db-wal
+*.db-shm
+rota-do-edital-backup-*.json
+
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
