@@ -1,5 +1,5 @@
 # banco e backups do usuário
-dados/
+/dados/
 *.db
 *.db-wal
 *.db-shm
