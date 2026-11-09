@@ -31,13 +31,17 @@ function md(s) {
 }
 
 /* ---------- API do servidor local ---------- */
+/* API versionada (contrato em contract/openapi.yaml). Em outro aparelho da rede,
+   o PC pede o código de pareamento uma vez e guarda uma sessão em cookie. */
 async function api(metodo, caminho, corpo) {
   let r;
   try {
-    r = await fetch("/api/" + caminho, {method: metodo, headers: corpo !== undefined ? {"content-type": "application/json"} : {}, body: corpo !== undefined ? JSON.stringify(corpo) : undefined});
+    r = await fetch("/v1/" + caminho, {method: metodo, credentials: "same-origin",
+      headers: corpo !== undefined ? {"content-type": "application/json"} : {}, body: corpo !== undefined ? JSON.stringify(corpo) : undefined});
   } catch (e) { throw {code: "servidor", message: "O servidor local não respondeu. Confira se a janela do Rota do Edital ainda está aberta."}; }
   const d = await r.json().catch(() => null);
-  if (!r.ok) { if (r.status === 404 && caminho.startsWith("conteudo/")) return null; throw {code: (d && d.code) || "servidor", message: (d && (d.message || d.erro)) || "Erro " + r.status}; }
+  if (r.status === 401 && d && d.code === "codigo") { S.pedeCodigo = true; render(); }
+  if (!r.ok) { if (r.status === 404 && caminho.startsWith("conteudo/")) return null; throw {code: (d && d.code) || "servidor", message: (d && (d.detail || d.message || d.erro)) || "Erro " + r.status}; }
   return d;
 }
 async function ia(prompt, maxTokens) {
@@ -56,7 +60,9 @@ const S = {ready: false, ed: null, view: "hoje", topic: null, iaStatus: null, on
   treino: null,        // treino misto em andamento
   errView: null, errResp: {}, errDel: null,
   mats: [],            // materiais de apoio (PDFs) do edital aberto
-  matFiltro: "todos", matForm: false, matDel: null, gabVer: {}};
+  matFiltro: "todos", matForm: false, matDel: null, gabVer: {},
+  rev: 0, base: null,  // versão do edital no servidor e cópia dela (para mesclar mudanças de outro aparelho)
+  pedeCodigo: false, par: null};
 
 /* ---------- tema (preferência só deste navegador) ---------- */
 const TEMAS = ["sistema", "claro", "escuro"];
@@ -73,10 +79,21 @@ const btnTema = () => `<button class="ghost small" data-act="tema" title="Altern
 /* ---------- persistência ---------- */
 let saveT = null, saving = false, dirty = false;
 function save() { dirty = true; clearTimeout(saveT); saveT = setTimeout(flush, 500); }
+/* Salva enviando a versão-base; se outro aparelho mudou o edital no meio tempo,
+   o servidor mescla e devolve o resultado. */
 async function flush() {
   if (saving || !dirty || !S.ed) return; saving = true; dirty = false;
-  try { await api("PUT", "editais/" + S.ed.id, S.ed); }
-  catch (e) { toast(erroTxt(e)); dirty = true; }
+  const enviado = JSON.parse(JSON.stringify(S.ed));
+  try {
+    const r = await api("POST", `editais/${S.ed.id}/mesclar`, {base_rev: S.rev, base: S.base, doc: enviado});
+    S.rev = r.rev;
+    if (r.mesclado && r.doc) {
+      const id = S.ed.id;
+      if (dirty) { const m = await api("POST", "mesclar", {base: enviado, local: S.ed, remoto: r.doc}); if (S.ed && S.ed.id === id) S.ed = m.doc; }
+      else if (S.ed && S.ed.id === id) S.ed = r.doc;
+      S.base = r.doc; render(); toast("Progresso do outro aparelho incorporado.");
+    } else S.base = enviado;
+  } catch (e) { toast(erroTxt(e)); dirty = true; }
   saving = false; if (dirty) setTimeout(flush, 1500);
 }
 async function getContent(tid) {
@@ -88,14 +105,16 @@ async function putContent(tid) {
   const c = S.content[tid]; if (!c) return;
   try { await api("PUT", `conteudo/${S.ed.id}/${tid}`, c); S.temAula.add(tid); } catch (e) { toast(erroTxt(e)); }
 }
-async function abrirEdital(id) {
-  const e = await api("GET", "editais/" + id).catch(() => null);
-  if (!e) { toast("Não encontrei esse edital."); return; }
-  S.ed = e; S.content = {}; S.resp = {}; S.gen = {}; S.topic = null; S.view = "hoje"; S.treino = null; S.conf = {}; S.preQ = new Set(); S.errResp = {}; S.errView = null;
+async function abrirEdital(id, manterTela) {
+  const x = await api("GET", `editais/${id}/rev`).catch(() => null);
+  if (!x) { toast("Não encontrei esse edital."); return; }
+  const tela = manterTela ? {view: S.view, topic: S.topic} : null;
+  S.ed = x.doc; S.rev = x.rev; S.base = JSON.parse(JSON.stringify(x.doc)); S.content = {}; S.resp = {}; S.gen = {}; S.topic = null; S.view = "hoje"; S.treino = null; S.conf = {}; S.preQ = new Set(); S.errResp = {}; S.errView = null;
   const ids = await api("GET", "conteudo/" + id).catch(() => []);
   S.temAula = new Set(ids || []);
   await carregarMats();
   await api("PUT", "ativo", {id}).catch(() => {});
+  if (tela && (!tela.topic || achar(tela.topic.tid))) { S.view = tela.view === "treino" ? "hoje" : tela.view; S.topic = tela.topic; }
   render();
 }
 async function carregarMats() {
@@ -116,8 +135,17 @@ window.addEventListener("online", () => { S.online = true; render(); });
 window.addEventListener("offline", () => { S.online = false; render(); });
 
 /* ---------- leitura do edital ---------- */
+/* pdf.js (~90 KB gzip) só é baixado quando há um PDF para ler */
+let pdfJsPromessa = null;
+function carregarPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve();
+  return pdfJsPromessa = pdfJsPromessa || new Promise(res => {
+    const sc = document.createElement("script"); sc.src = "/vendor/pdf.min.js"; sc.onload = sc.onerror = () => res(); document.head.appendChild(sc);
+  });
+}
 async function lerArquivo(file) {
   if (/\.txt$/i.test(file.name) || file.type === "text/plain") return {texto: await file.text(), paginas: null};
+  await carregarPdfJs();
   if (!window.pdfjsLib) throw new Error("O leitor de PDF não carregou. Cole o texto do edital no campo de texto.");
   pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.js";
   const pdf = await pdfjsLib.getDocument({data: await file.arrayBuffer()}).promise;
@@ -197,6 +225,7 @@ ${recortarConteudo(texto)}`, 16000);
     dataProva: S.dataProva || (/^\d{4}-\d{2}-\d{2}$/.test(meta.data_prova || "") ? meta.data_prova : null),
     horas: Number(S.horas) || 3, estilo: meta.estilo === "CE" ? "CE" : "ME", dicas: String(est.dicas || ""), materias, erros: []};
   S.content = {}; S.resp = {}; S.gen = {}; S.temAula = new Set();
+  S.rev = 0; S.base = null; S.mats = [];
   dirty = true; await flush(); await api("PUT", "ativo", {id: S.ed.id}).catch(() => {});
   const dias = S.ed.dataProva ? diasEntre(hoje(), S.ed.dataProva) : null;
   setStep(3, "ok", `${blocosDia()} blocos de 50 min por dia` + (dias !== null ? ` · ${dias} dias até a prova` : ""));
@@ -462,7 +491,9 @@ function carregarExemplo() {
       mk(2, "Direito Constitucional", 15, [["Direitos e garantias fundamentais (art. 5º)", "alta"], ["Organização do Poder Judiciário", "media"], ["Administração pública (arts. 37 a 41)", "alta"], ["Remédios constitucionais", "media"]]),
       mk(3, "Noções de Informática", 10, [["Segurança da informação e malwares", "alta"], ["Planilhas eletrônicas", "media"], ["Redes, internet e navegadores", "media"]])], erros: []};
   S.content = {}; S.resp = {}; S.gen = {}; S.temAula = new Set(); S.view = "hoje";
-  dirty = true; flush(); api("PUT", "ativo", {id: "exemplo"}).catch(() => {});
+  S.mats = []; dirty = false;
+  api("PUT", "editais/exemplo", S.ed).then(() => api("GET", "editais/exemplo/rev")).then(x => { S.rev = x.rev; S.base = x.doc; }).catch(() => {});
+  api("PUT", "ativo", {id: "exemplo"}).catch(() => {});
   render(); toast("Exemplo carregado. A aula de cada tópico é gerada quando você abre.");
 }
 async function trocarEdital() {
@@ -498,6 +529,7 @@ async function importarBackup(file) {
 /* ---------- renderização ---------- */
 function render() {
   const app = $("#app");
+  if (S.pedeCodigo) { app.innerHTML = vCodigo(); return; }
   if (!S.ed) { app.innerHTML = S.pipe ? vPipe() : vEnvio(); return; }
   syncHash();
   app.innerHTML = vTopo() + (S.topic ? vTopico() : S.view === "treino" && S.treino ? vTreino() : S.view === "hoje" ? vHoje() : S.view === "edital" ? vEdital() : S.view === "desempenho" ? vDesempenho() : S.view === "erros" ? vErros() : S.view === "materiais" ? vMateriais() : vAjustes());
@@ -712,6 +744,7 @@ function vAjustes() {
 <p class="muted">Gera e salva agora a aula de todos os tópicos (${S.temAula.size} de ${total} já salvas). Depois disso, resumos e questões abrem sem conexão. ${S.iaStatus && S.iaStatus.provedor === "anthropic" ? "Cada aula consome créditos da sua API." : ""}</p>
 ${p && p.run ? `<div class="row"><div class="prog"><i style="width:${pct(p.feitos, p.total)}%"></i></div></div><div class="row"><span class="mono">${p.feitos}/${p.total} aulas</span><span class="spacer"></span><button class="small" data-act="pararPre">Parar</button></div>`
   : `<div class="row" style="margin-top:10px"><button data-act="preGerar" ${!S.iaStatus || !S.iaStatus.provedor || S.temAula.size >= total ? "disabled" : ""}>Salvar todas as aulas</button>${p && p.erro ? `<span style="color:var(--bad)">${esc(p.erro)}</span>` : ""}</div>`}</div>
+${vPareamento()}
 ${vConfigIA()}
 <div class="panel"><h3>Backup</h3><p class="muted">Leve seu progresso para outro computador ou guarde uma cópia.</p>
 <div class="row" style="margin-top:10px"><a class="btn" href="/api/backup" download>Baixar backup</a>
@@ -972,6 +1005,32 @@ function vSimuladoHoje(P, cobertura) {
   return `<div class="section"><div class="row"><h2>Simulado com prova real</h2></div><div class="list"><a class="item" href="${esc(linkMat(prox))}" target="_blank" rel="noopener"><span class="tag">${n} questões</span><span class="t"><strong>${esc(prox.titulo)}</strong><span>${(prox.simulados || []).length ? "Refaça para medir a evolução" : "Ainda não feita"} · reserve cerca de ${Math.round(n * 3 / 60 * 2) / 2} h · registre o resultado em Materiais</span></span><span class="muted" aria-hidden="true">›</span></a></div>
 <p class="note">Uma prova inteira por semana na reta final treina ritmo e resistência. Os erros dela viram tópicos de revisão.</p></div>`;
 }
+/* ---------- celular: pareamento com o app Android e acesso pela rede ---------- */
+function haQuanto(ms) {
+  const m = Math.round((Date.now() - ms) / 60000);
+  return m < 1 ? "agora" : m < 60 ? `há ${m} min` : m < 1440 ? `há ${Math.round(m / 60)} h` : `há ${Math.round(m / 1440)} d`;
+}
+function vCodigo() {
+  return `<div class="hero"><p class="label">Rota do Edital</p><h1 style="margin-top:8px">Digite o código do PC</h1>
+<p>Para ver seus dados por outro aparelho, abra o app no PC, vá em Ajustes → Celular e digite aqui o código de 6 letras.</p></div>
+<div class="panel" style="max-width:420px"><div class="field"><label class="label" for="cod-rede">Código de pareamento</label>
+<input id="cod-rede" maxlength="6" autocapitalize="characters" autocomplete="one-time-code" style="font:600 1.5rem var(--f-mono);letter-spacing:.2em;text-transform:uppercase"></div>
+<button class="primary" data-act="salvarCodigo" style="margin-top:12px">Entrar</button></div>`;
+}
+async function carregarPareamento() { S.par = await api("GET", "pareamento").catch(() => ({erro: true})); render(); }
+function vPareamento() {
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  if (!local) return "";
+  const p = S.par;
+  if (!p) { carregarPareamento(); return `<div class="panel"><h3>Celular</h3><p class="muted">Carregando…</p></div>`; }
+  if (p.erro) return "";
+  if (!p.rede) return `<div class="panel"><h3>Celular</h3><p class="muted">Para usar o app Android sincronizado com este PC, feche esta janela e abra o Rota do Edital pelo <b>iniciar-na-rede</b> (ou <span class="mono">python server.py --rede</span>). PC e celular precisam estar no mesmo Wi-Fi.</p></div>`;
+  return `<div class="panel"><h3>Celular</h3><p class="muted">No app Android, toque em <b>Conectar ao PC</b> e informe (PC e celular no mesmo Wi-Fi):</p>
+<div class="par-grid"><div><span class="label">Endereço</span><b class="mono">${esc(p.enderecos[0] || "IP não encontrado")}</b></div><div><span class="label">Código</span><b class="mono">${esc(p.codigo)}</b></div></div>
+<p class="muted" style="font-size:var(--text-sm)">O progresso feito em qualquer um dos dois é mesclado na sincronização. O código só serve para parear; depois cada aparelho usa a própria chave.</p>
+${(p.dispositivos || []).length ? `<h4 class="label" style="margin:14px 0 6px">Aparelhos pareados</h4><div class="list">${p.dispositivos.map(d => `<div class="item" style="cursor:default"><span class="tag">${esc(d.nome)}</span><span class="t"><span>${d.visto ? "visto " + haQuanto(d.visto * 1000) : "nunca usado"}</span></span><button class="small ghost" data-act="tirarDisp" data-id="${esc(d.id)}">Desconectar</button></div>`).join("")}</div>` : ""}
+<button class="small" data-act="novoCodigo" style="margin-top:12px">Gerar novo código</button></div>`;
+}
 /* cronômetro dos itens em andamento */
 setInterval(() => {
   document.querySelectorAll("[data-desde]").forEach(el => { const s = Math.round((Date.now() - +el.dataset.desde) / 1000); el.textContent = s + " s"; });
@@ -1018,6 +1077,9 @@ document.addEventListener("click", ev => {
   else if (a === "tipoErro") { const x = S.ed.erros.find(e => e.id === b.dataset.id); if (x) { x.tipo = x.tipo === b.dataset.v ? undefined : b.dataset.v; save(); render(); } }
   else if (a === "treino") montarTreino(10);
   else if (a === "sairTreino") { S.treino = null; S.view = "hoje"; render(); window.scrollTo(0, 0); }
+  else if (a === "salvarCodigo") { const codigo = ($("#cod-rede").value || "").trim().toUpperCase(); api("POST", "sessao", {codigo}).then(() => { S.pedeCodigo = false; init(); }, e => toast(erroTxt(e))); }
+  else if (a === "tirarDisp") api("DELETE", "dispositivos/" + b.dataset.id).then(carregarPareamento, e => toast(erroTxt(e)));
+  else if (a === "novoCodigo") api("POST", "pareamento/novo", {}).then(p => { S.par = p; render(); toast("Novo código gerado. O celular vai pedir o código de novo."); }, e => toast(erroTxt(e)));
   else if (a === "verGab") { S.gabVer[b.dataset.k] = !S.gabVer[b.dataset.k]; render(); }
   else if (a === "matFiltro") { S.matFiltro = b.dataset.v; render(); }
   else if (a === "matForm") { S.matForm = !S.matForm; render(); }
