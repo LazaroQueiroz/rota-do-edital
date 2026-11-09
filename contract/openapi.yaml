@@ -1,0 +1,323 @@
+openapi: 3.1.0
+info:
+  title: Rota do Edital — API local
+  version: "1"
+  summary: API do servidor local (PC) usada pelo app web e pelo app Android.
+  description: |
+    O servidor roda no computador do usuário (`backend/server.py`). Do próprio PC as rotas
+    são livres; de outro aparelho da rede (servidor iniciado com `--rede`) exigem
+    `Authorization: Bearer <token>` (app Android) ou o cookie `rota_sessao` (navegador),
+    obtidos trocando o código de pareamento mostrado no PC.
+
+    Regras: só mudanças compatíveis em /v1 (campos novos opcionais). Erros em
+    `application/problem+json` (RFC 9457) com a extensão `code`. GETs têm `ETag`
+    (responda `If-None-Match` para receber 304). Respostas de texto aceitam gzip.
+    As mesmas rotas existem em `/api/...` por compatibilidade com versões antigas do web.
+servers:
+  - url: http://localhost:8765/v1
+  - url: http://{ip}:8765/v1
+    variables: {ip: {default: 192.168.0.10}}
+security:
+  - token: []
+  - sessao: []
+components:
+  securitySchemes:
+    token: {type: http, scheme: bearer}
+    sessao: {type: apiKey, in: cookie, name: rota_sessao}
+  responses:
+    Problema:
+      description: Erro (RFC 9457)
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problema"}
+  schemas:
+    Problema:
+      type: object
+      required: [type, title, status, detail, code]
+      properties:
+        type: {type: string, example: about:blank}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string, description: Mensagem em português para mostrar ao usuário}
+        code: {type: string, examples: [codigo, codigo_invalido, bloqueado, sem_ia, nao_encontrado, pedido]}
+    Ok:
+      type: object
+      properties: {ok: {type: boolean}}
+    Revisao:
+      type: object
+      required: [due, feita]
+      properties:
+        due: {type: string, format: date}
+        feita: {type: boolean}
+        em: {type: [string, "null"], format: date}
+        reforco: {type: boolean}
+    Topico:
+      type: object
+      required: [id, nome, inc, st, revs, q]
+      additionalProperties: true
+      properties:
+        id: {type: string, example: m0t0}
+        nome: {type: string}
+        inc: {enum: [alta, media, baixa]}
+        st: {enum: [novo, estudado]}
+        em: {type: [string, "null"], format: date}
+        iv: {type: number, description: Intervalo atual da revisão adaptativa (dias)}
+        revs: {type: array, items: {$ref: "#/components/schemas/Revisao"}}
+        q: {type: object, properties: {f: {type: integer}, a: {type: integer}}}
+        qc: {type: object, description: Registro manual do QConcursos}
+    Materia:
+      type: object
+      required: [id, nome, topicos]
+      properties:
+        id: {type: string}
+        nome: {type: string}
+        questoes: {type: [integer, "null"]}
+        topicos: {type: array, items: {$ref: "#/components/schemas/Topico"}}
+    Erro:
+      type: object
+      required: [id, tid, enunciado, gabarito, em]
+      additionalProperties: true
+      properties:
+        id: {type: string}
+        tid: {type: string}
+        mid: {type: string}
+        enunciado: {type: string}
+        alternativas: {type: [array, "null"], items: {type: string}}
+        marcada: {type: string}
+        gabarito: {type: string}
+        explicacao: {type: string}
+        em: {type: string, format: date}
+        conf: {enum: [certeza, duvida, chute]}
+        sorte: {type: boolean}
+        due: {type: string, format: date}
+        ok: {type: integer, minimum: 0, maximum: 3}
+        dom: {type: boolean}
+        tipo: {enum: [conteudo, confusao, leitura, atencao]}
+        nota: {type: string}
+    Edital:
+      type: object
+      description: |
+        Documento único com plano e progresso. Campos desconhecidos devem ser preservados
+        por quem lê e regrava (o servidor mescla o documento inteiro).
+      required: [id, orgao, materias, erros]
+      additionalProperties: true
+      properties:
+        id: {type: string}
+        orgao: {type: string}
+        banca: {type: string}
+        cargo: {type: string}
+        dataProva: {type: [string, "null"], format: date}
+        horas: {type: number}
+        estilo: {enum: [CE, ME]}
+        dicas: {type: string}
+        seEntao: {type: string}
+        hojeMin: {type: object, properties: {d: {type: string, format: date}, min: {type: integer}}}
+        cal: {type: object, additionalProperties: {type: object, properties: {f: {type: integer}, a: {type: integer}}}}
+        ativ: {type: object, additionalProperties: {type: integer}}
+        materias: {type: array, items: {$ref: "#/components/schemas/Materia"}}
+        erros: {type: array, items: {$ref: "#/components/schemas/Erro"}}
+    EditalResumo:
+      type: object
+      properties:
+        id: {type: string}
+        orgao: {type: string}
+        cargo: {type: string}
+        banca: {type: string}
+        topicos: {type: integer}
+        estudados: {type: integer}
+        atualizado: {type: number}
+    Questao:
+      type: object
+      required: [enunciado, gabarito, explicacao]
+      properties:
+        enunciado: {type: string}
+        alternativas: {type: array, items: {type: string}}
+        gabarito: {type: string}
+        explicacao: {type: string}
+        origem: {type: string}
+    Aula:
+      type: object
+      additionalProperties: true
+      properties:
+        resumo: {type: string, description: "Markdown simples (###, -, **)"}
+        pegadinhas: {type: array, items: {type: string}}
+        porques: {type: array, items: {type: object, properties: {p: {type: string}, r: {type: string}}}}
+        questoes: {type: array, items: {$ref: "#/components/schemas/Questao"}}
+        geradoEm: {type: string, format: date}
+    UsoMaterial:
+      type: object
+      properties:
+        tid: {type: [string, "null"]}
+        pag: {type: [string, "null"], example: "70-113"}
+        quando: {enum: [estudo, questoes, revisao, consulta]}
+        nota: {type: [string, "null"]}
+        questoes: {type: array, items: {type: integer}}
+    Material:
+      type: object
+      required: [id, titulo, tipo]
+      additionalProperties: true
+      properties:
+        id: {type: string, pattern: "^[A-Za-z0-9_-]{1,80}$"}
+        titulo: {type: string}
+        tipo: {enum: [edital, prova, gabarito, norma, lei, guia, livro, apostila, outro]}
+        fonte: {type: string}
+        url: {type: string}
+        licenca: {type: string}
+        arquivo: {type: string}
+        paginas: {type: integer}
+        tamanho: {type: integer}
+        usos: {type: array, items: {$ref: "#/components/schemas/UsoMaterial"}}
+        gab: {type: object, properties: {id: {type: string}, pag: {type: integer}}}
+        respostas: {type: object, additionalProperties: {type: string}}
+        simulados: {type: array, items: {type: object, properties: {d: {type: string}, a: {type: integer}, n: {type: integer}}}}
+        temArquivo: {type: boolean, readOnly: true}
+paths:
+  /health:
+    get:
+      security: []
+      summary: Servidor no ar
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object, properties: {ok: {type: boolean}, versao: {type: string}}}}}}
+  /dispositivos:
+    post:
+      security: []
+      summary: Pareia um aparelho trocando o código do PC por um token
+      requestBody:
+        content: {application/json: {schema: {type: object, required: [codigo], properties: {codigo: {type: string, minLength: 6, maxLength: 6}, nome: {type: string}}}}}
+      responses:
+        "201": {description: Token do aparelho (mostrado só uma vez), content: {application/json: {schema: {type: object, properties: {id: {type: string}, token: {type: string}}}}}}
+        "401": {$ref: "#/components/responses/Problema"}
+        "429": {$ref: "#/components/responses/Problema"}
+  /dispositivos/{id}:
+    delete:
+      summary: Desconecta um aparelho (só do próprio PC)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {description: ok}, "403": {$ref: "#/components/responses/Problema"}}
+  /sessao:
+    post:
+      security: []
+      summary: Navegador de outro aparelho troca o código por um cookie de sessão
+      requestBody: {content: {application/json: {schema: {type: object, properties: {codigo: {type: string}}}}}}
+      responses: {"201": {description: "Cookie rota_sessao (HttpOnly; SameSite=Lax)"}, "401": {$ref: "#/components/responses/Problema"}}
+  /pareamento:
+    get:
+      summary: Código, endereço e aparelhos pareados (só do próprio PC)
+      responses: {"200": {description: ok}}
+  /pareamento/novo:
+    post:
+      summary: Gera outro código de pareamento (só do próprio PC)
+      responses: {"200": {description: ok}}
+  /status:
+    get:
+      summary: Provedor de IA configurado no PC
+      responses: {"200": {description: ok}}
+  /ia:
+    post:
+      summary: Chama a IA configurada no PC e devolve o JSON extraído da resposta
+      requestBody: {content: {application/json: {schema: {type: object, required: [prompt], properties: {prompt: {type: string}, max_tokens: {type: integer}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object, properties: {ok: {type: boolean}, dados: {}}}}}}
+        "400": {$ref: "#/components/responses/Problema"}
+        "502": {$ref: "#/components/responses/Problema"}
+  /ativo:
+    get: {summary: Edital aberto, responses: {"200": {description: ok}}}
+    put: {summary: Troca o edital aberto, responses: {"200": {description: ok}}}
+  /editais:
+    get:
+      summary: Lista resumida (no máximo dezenas de itens por usuário)
+      responses: {"200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/EditalResumo"}}}}}}
+  /editais/{id}:
+    parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+    get: {summary: Edital completo, responses: {"200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Edital"}}}}, "404": {$ref: "#/components/responses/Problema"}}}
+    put: {summary: Grava sem mesclar (backup e criação), responses: {"200": {description: ok}}}
+    delete: {summary: Apaga edital, aulas e materiais, responses: {"200": {description: ok}}}
+  /editais/{id}/rev:
+    get:
+      summary: Edital com a versão atual
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {description: ok, content: {application/json: {schema: {type: object, properties: {rev: {type: integer}, doc: {$ref: "#/components/schemas/Edital"}}}}}}}
+  /editais/{id}/mesclar:
+    post:
+      summary: Grava a versão de um aparelho; se o PC mudou desde a base, mescla a três vias
+      description: |
+        Envie a última versão recebida (`base_rev` e `base`). Se `base_rev` for a atual, o
+        documento é gravado como está. Senão o servidor mescla (contadores somam, listas com id
+        se unem, tópico estudado continua estudado, revisões feitas continuam feitas) e devolve
+        o resultado em `doc`, que o aparelho deve adotar como nova base.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        content: {application/json: {schema: {type: object, required: [doc], properties: {base_rev: {type: integer}, base: {$ref: "#/components/schemas/Edital"}, doc: {$ref: "#/components/schemas/Edital"}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object, properties: {rev: {type: integer}, mesclado: {type: boolean}, doc: {oneOf: [{$ref: "#/components/schemas/Edital"}, {type: "null"}]}}}}}}
+  /mesclar:
+    post:
+      summary: Mescla três versões sem gravar (usado quando houve edição durante o envio)
+      requestBody: {content: {application/json: {schema: {type: object, properties: {base: {}, local: {}, remoto: {}}}}}}
+      responses: {"200": {description: ok, content: {application/json: {schema: {type: object, properties: {doc: {$ref: "#/components/schemas/Edital"}}}}}}}
+  /sync/estado:
+    get:
+      summary: Versões de editais, aulas e materiais para o app decidir o que baixar
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  editais: {type: array, items: {type: object, properties: {id: {type: string}, rev: {type: integer}}}}
+                  conteudo: {type: array, items: {type: object, properties: {ed: {type: string}, tid: {type: string}, atualizado: {type: number}}}}
+                  materiais: {type: array, items: {type: object, properties: {ed: {type: string}, id: {type: string}, atualizado: {type: number}, arquivo: {type: string}, tamanho: {type: integer}, temArquivo: {type: boolean}}}}
+                  ativo: {type: [string, "null"]}
+  /conteudo/{ed}:
+    get:
+      summary: Ids dos tópicos com aula salva
+      parameters: [{name: ed, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}}
+  /conteudo/{ed}/alteracoes:
+    get:
+      summary: Aulas alteradas depois de `desde`, paginadas por cursor
+      parameters:
+        - {name: ed, in: path, required: true, schema: {type: string}}
+        - {name: desde, in: query, schema: {type: number, default: 0}}
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, default: 50, maximum: 100}}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  itens: {type: array, items: {type: object, properties: {tid: {type: string}, atualizado: {type: number}, dados: {$ref: "#/components/schemas/Aula"}}}}
+                  proximo: {type: [string, "null"]}
+  /conteudo/{ed}/{tid}:
+    parameters:
+      - {name: ed, in: path, required: true, schema: {type: string}}
+      - {name: tid, in: path, required: true, schema: {type: string}}
+    get: {summary: Aula de um tópico, responses: {"200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Aula"}}}}, "404": {$ref: "#/components/responses/Problema"}}}
+    put: {summary: Grava a aula, responses: {"200": {description: ok}}}
+  /materiais/{ed}:
+    get:
+      summary: Materiais de apoio do edital
+      parameters: [{name: ed, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Material"}}}}}}
+  /materiais/{ed}/{id}:
+    parameters:
+      - {name: ed, in: path, required: true, schema: {type: string}}
+      - {name: id, in: path, required: true, schema: {type: string}}
+    put: {summary: Grava a descrição do material, responses: {"200": {description: ok}, "400": {$ref: "#/components/responses/Problema"}}}
+    delete: {summary: Apaga o material e o PDF, responses: {"200": {description: ok}}}
+  /materiais/{ed}/{id}/arquivo:
+    put:
+      summary: Envia o PDF (até 60 MB)
+      parameters:
+        - {name: ed, in: path, required: true, schema: {type: string}}
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody: {content: {application/pdf: {schema: {type: string, format: binary}}}}
+      responses: {"200": {description: ok}, "400": {$ref: "#/components/responses/Problema"}}
+  /backup:
+    get: {summary: Exporta editais, aulas e descrição dos materiais, responses: {"200": {description: arquivo .json}}}
+    post: {summary: Restaura backup ou importa pacote, responses: {"200": {description: ok}}}
+# Fora de /v1: GET /materiais/{ed}/{id}.pdf serve o arquivo (mesma autenticação).

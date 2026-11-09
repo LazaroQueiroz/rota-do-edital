@@ -12,6 +12,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -160,6 +161,68 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(len(self.req("GET", "/api/materiais/m1")[1]), 1)
         self.req("DELETE", "/api/editais/m1")
         self.assertEqual(self.req("GET", "/api/materiais/m1")[1], [])
+
+    def test_08_sincronia(self):
+        top = lambda st, f: {"id": "m0t0", "st": st, "revs": [], "q": {"f": f, "a": f}}
+        ed = lambda st, f: {"id": "s1", "materias": [{"id": "m0", "topicos": [top(st, f)]}], "erros": []}
+        base = ed("novo", 0)
+        self.req("PUT", "/api/editais/s1", base)
+        st, d = self.req("GET", "/api/editais/s1/rev")
+        rev = d["rev"]
+        # o PC avança (2 questões) e o celular, ainda na base antiga, estuda o tópico com 3 questões
+        st, d = self.req("POST", "/api/editais/s1/mesclar", {"base_rev": rev, "base": base, "doc": ed("novo", 2)})
+        self.assertFalse(d["mesclado"])
+        st, d = self.req("POST", "/api/editais/s1/mesclar", {"base_rev": rev, "base": base, "doc": ed("estudado", 3)})
+        self.assertTrue(d["mesclado"])
+        t = d["doc"]["materias"][0]["topicos"][0]
+        self.assertEqual((t["st"], t["q"]["f"]), ("estudado", 5))
+        self.assertEqual(self.req("GET", "/api/editais/s1/rev")[1]["rev"], rev + 2)
+        estado = self.req("GET", "/api/sync/estado")[1]
+        self.assertIn({"id": "s1", "rev": rev + 2}, estado["editais"])
+        self.assertIn("doc", self.req("POST", "/api/mesclar", {"base": base, "local": base, "remoto": ed("novo", 1)})[1])
+        par = self.req("GET", "/api/pareamento")[1]
+        self.assertEqual(len(par["codigo"]), 6)
+        novo = self.req("POST", "/api/pareamento/novo", {})[1]["codigo"]
+        self.assertNotEqual(novo, par["codigo"])
+
+    def test_09_contrato_v1(self):
+        st, d = self.req("GET", "/v1/health")
+        self.assertEqual((st, d["ok"]), (200, True))
+        # erro no formato problem+json
+        st, corpo, h = self.bruto("GET", "/v1/editais/nao-existe", None)
+        self.assertEqual(st, 404)
+        self.assertIn("application/problem+json", h["content-type"])
+        self.assertEqual(json.loads(corpo)["status"], 404)
+        # ETag: a segunda leitura igual devolve 304
+        _, _, h = self.bruto("GET", "/v1/editais", None)
+        r = urllib.request.Request(self.base + "/v1/editais", headers={"if-none-match": h["etag"]})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(r, timeout=5)
+        self.assertEqual(ctx.exception.code, 304)
+        # gzip em texto grande
+        r = urllib.request.Request(self.base + "/app.js", headers={"accept-encoding": "gzip"})
+        with urllib.request.urlopen(r, timeout=5) as resp:
+            self.assertEqual(resp.headers["content-encoding"], "gzip")
+
+    def test_10_pareamento_e_aulas_em_lote(self):
+        cod = self.req("GET", "/v1/pareamento")[1]["codigo"]
+        self.assertEqual(self.req("POST", "/v1/dispositivos", {"codigo": "XXXXXX", "nome": "Teste"})[0], 401)
+        st, d = self.req("POST", "/v1/dispositivos", {"codigo": cod.lower(), "nome": "Pixel"})
+        self.assertEqual(st, 201)
+        self.assertGreater(len(d["token"]), 30)
+        disp = self.req("GET", "/v1/pareamento")[1]["dispositivos"]
+        self.assertTrue(any(x["nome"] == "Pixel" for x in disp))
+        self.assertEqual(self.req("DELETE", "/v1/dispositivos/" + d["id"])[0], 200)
+        for i in range(5):
+            self.req("PUT", f"/v1/conteudo/lote/t{i}", {"resumo": str(i)})
+        vistos, cursor = [], ""
+        while True:
+            pg = self.req("GET", f"/v1/conteudo/lote/alteracoes?desde=0&limit=2&cursor={urllib.parse.quote(cursor)}")[1]
+            vistos += [x["tid"] for x in pg["itens"]]
+            if not pg["proximo"]:
+                break
+            cursor = pg["proximo"]
+        self.assertEqual(sorted(vistos), [f"t{i}" for i in range(5)])
 
     def test_06_estaticos(self):
         for rota, tipo in [("/", "text/html"), ("/app.js", "text/javascript"), ("/vendor/pdf.worker.min.js", "text/javascript")]:
