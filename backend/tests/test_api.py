@@ -16,7 +16,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parent.parent
+RAIZ = Path(__file__).resolve().parent.parent.parent
 
 
 def porta_livre():
@@ -54,12 +54,12 @@ class TestAPI(unittest.TestCase):
     def setUpClass(cls):
         # cópia isolada do app, para não tocar no banco real
         cls.tmp = Path(tempfile.mkdtemp())
-        shutil.copy(RAIZ / "server.py", cls.tmp / "server.py")
-        shutil.copytree(RAIZ / "static", cls.tmp / "static")
+        shutil.copytree(RAIZ / "backend", cls.tmp / "backend", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        shutil.copytree(RAIZ / "web", cls.tmp / "web")
         cls.ollama = HTTPServer(("127.0.0.1", porta_livre()), OllamaFalso)
         threading.Thread(target=cls.ollama.serve_forever, daemon=True).start()
         cls.porta = porta_livre()
-        cls.proc = subprocess.Popen([sys.executable, str(cls.tmp / "server.py"), "--sem-navegador", "--porta", str(cls.porta)],
+        cls.proc = subprocess.Popen([sys.executable, str(cls.tmp / "backend" / "server.py"), "--sem-navegador", "--porta", str(cls.porta)],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cls.base = f"http://127.0.0.1:{cls.porta}"
         for _ in range(50):

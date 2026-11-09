@@ -3,11 +3,11 @@
 Rota do Edital — servidor local.
 
 Usa só a biblioteca padrão do Python (3.9 ou mais novo). Os dados ficam em
-dados/rota.db (SQLite), na mesma pasta deste arquivo.
+dados/rota.db (SQLite), na raiz do projeto.
 
-    python server.py                 # abre em http://localhost:8765
-    python server.py --rede          # libera o acesso de outros aparelhos da sua rede
-    python server.py --porta 9000    # outra porta
+    python backend/server.py                 # abre em http://localhost:8765
+    python backend/server.py --rede          # libera o acesso de outros aparelhos da sua rede
+    python backend/server.py --porta 9000    # outra porta
 """
 import argparse
 import json
@@ -26,9 +26,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
-BASE = Path(__file__).resolve().parent
-STATIC = BASE / "static"
-DADOS = BASE / "dados"
+RAIZ = Path(__file__).resolve().parent.parent   # backend/ fica dentro da raiz do projeto
+STATIC = RAIZ / "web"
+DADOS = RAIZ / "dados"
 DB_PATH = DADOS / "rota.db"
 MATERIAIS = DADOS / "materiais"   # PDFs de apoio, um diretório por edital
 ID_OK = re.compile(r"[A-Za-z0-9_-]{1,80}")
