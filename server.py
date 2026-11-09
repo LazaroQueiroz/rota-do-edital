@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import socket
 import sqlite3
 import sys
@@ -29,6 +30,8 @@ BASE = Path(__file__).resolve().parent
 STATIC = BASE / "static"
 DADOS = BASE / "dados"
 DB_PATH = DADOS / "rota.db"
+MATERIAIS = DADOS / "materiais"   # PDFs de apoio, um diretório por edital
+ID_OK = re.compile(r"[A-Za-z0-9_-]{1,80}")
 MAX_BODY = 60 * 1024 * 1024
 
 MODELO_ANTHROPIC = "claude-sonnet-5-5"
@@ -63,6 +66,9 @@ def iniciar_banco():
                 ed TEXT NOT NULL, tid TEXT NOT NULL, dados TEXT NOT NULL,
                 PRIMARY KEY(ed, tid));
             CREATE TABLE IF NOT EXISTS config(k TEXT PRIMARY KEY, v TEXT);
+            CREATE TABLE IF NOT EXISTS materiais(
+                ed TEXT NOT NULL, id TEXT NOT NULL, dados TEXT NOT NULL,
+                PRIMARY KEY(ed, id));
             """
         )
 
@@ -184,7 +190,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "RotaDoEdital/1.0"
 
     def log_message(self, fmt, *args):
-        if "/api/ia" in (args[0] if args else ""):
+        if "/api/ia" in (str(args[0]) if args else ""):
             sys.stderr.write("%s  %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
 
     # utilidades
@@ -221,9 +227,34 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(dados)
 
+    def _arquivo_material(self, caminho):
+        partes = [unquote(x) for x in caminho.split("/")[2:] if x]
+        if len(partes) != 2 or not ID_OK.fullmatch(partes[0]) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}\.pdf", partes[1]):
+            return self._json({"erro": "não encontrado"}, 404)
+        alvo = MATERIAIS / partes[0] / partes[1]
+        if not alvo.is_file():
+            return self._json({"erro": "Arquivo não encontrado neste computador."}, 404)
+        self.send_response(200)
+        self.send_header("content-type", "application/pdf")
+        self.send_header("content-disposition", f'inline; filename="{partes[1]}"')
+        self.send_header("cache-control", "no-cache")
+        self.send_header("content-length", str(alvo.stat().st_size))
+        self.end_headers()
+        with open(alvo, "rb") as f:
+            shutil.copyfileobj(f, self.wfile)
+        return None
+
+    def _corpo_bruto(self):
+        n = int(self.headers.get("content-length") or 0)
+        if n > MAX_BODY:
+            raise ValueError("arquivo grande demais (limite de 60 MB)")
+        return self.rfile.read(n) if n else b""
+
     # roteamento
     def do_GET(self):
         p = urlparse(self.path).path
+        if p.startswith("/materiais/"):
+            return self._arquivo_material(p)
         if not p.startswith("/api/"):
             return self._estatico(p)
         try:
@@ -325,7 +356,54 @@ class Handler(BaseHTTPRequestHandler):
                 with _db_lock, conectar() as c:
                     c.execute("DELETE FROM editais WHERE id=?", (eid,))
                     c.execute("DELETE FROM conteudo WHERE ed=?", (eid,))
+                    c.execute("DELETE FROM materiais WHERE ed=?", (eid,))
+                if ID_OK.fullmatch(eid):
+                    shutil.rmtree(MATERIAIS / eid, ignore_errors=True)
                 return self._json({"ok": True})
+
+        # materiais de apoio (PDFs) ligados aos tópicos
+        if len(partes) == 2 and partes[0] == "materiais" and m == "GET":
+            ed = partes[1]
+            with conectar() as c:
+                linhas = [json.loads(d) for (d,) in c.execute("SELECT dados FROM materiais WHERE ed=?", (ed,))]
+            for x in linhas:
+                x["temArquivo"] = bool(x.get("arquivo")) and ID_OK.fullmatch(ed) is not None and (MATERIAIS / ed / x["arquivo"]).is_file()
+            return self._json(linhas)
+
+        if len(partes) == 3 and partes[0] == "materiais":
+            ed, mid = partes[1], partes[2]
+            if not ID_OK.fullmatch(ed) or not ID_OK.fullmatch(mid):
+                return self._json({"erro": "Identificador inválido."}, 400)
+            if m == "PUT":
+                corpo = self._corpo()
+                if not isinstance(corpo, dict) or not str(corpo.get("titulo", "")).strip():
+                    return self._json({"erro": "O material precisa de um título."}, 400)
+                corpo["id"] = mid
+                corpo.pop("temArquivo", None)
+                with _db_lock, conectar() as c:
+                    c.execute("INSERT INTO materiais(ed,id,dados) VALUES(?,?,?) "
+                              "ON CONFLICT(ed,id) DO UPDATE SET dados=excluded.dados",
+                              (ed, mid, json.dumps(corpo, ensure_ascii=False)))
+                return self._json({"ok": True})
+            if m == "DELETE":
+                with _db_lock, conectar() as c:
+                    c.execute("DELETE FROM materiais WHERE ed=? AND id=?", (ed, mid))
+                (MATERIAIS / ed / f"{mid}.pdf").unlink(missing_ok=True)
+                return self._json({"ok": True})
+
+        if len(partes) == 4 and partes[0] == "materiais" and partes[3] == "arquivo" and m == "PUT":
+            ed, mid = partes[1], partes[2]
+            if not ID_OK.fullmatch(ed) or not ID_OK.fullmatch(mid):
+                return self._json({"erro": "Identificador inválido."}, 400)
+            dados = self._corpo_bruto()
+            if not dados.startswith(b"%PDF-"):
+                return self._json({"erro": "Envie um arquivo PDF."}, 400)
+            pasta = MATERIAIS / ed
+            pasta.mkdir(parents=True, exist_ok=True)
+            tmp = pasta / f".{mid}.pdf.tmp"
+            tmp.write_bytes(dados)
+            tmp.replace(pasta / f"{mid}.pdf")
+            return self._json({"ok": True, "arquivo": f"{mid}.pdf", "tamanho": len(dados)})
 
         if len(partes) == 2 and partes[0] == "conteudo" and m == "GET":
             with conectar() as c:
@@ -351,8 +429,10 @@ class Handler(BaseHTTPRequestHandler):
                 with conectar() as c:
                     ed = [{"id": i, "dados": json.loads(d)} for i, d in c.execute("SELECT id, dados FROM editais")]
                     co = [{"ed": e, "tid": t, "dados": json.loads(d)} for e, t, d in c.execute("SELECT ed, tid, dados FROM conteudo")]
+                    # só a descrição dos materiais; os PDFs ficam em dados/materiais/ (copie a pasta junto)
+                    ma = [{"ed": e, "id": i, "dados": json.loads(d)} for e, i, d in c.execute("SELECT ed, id, dados FROM materiais")]
                 dados = json.dumps({"versao": 1, "exportado": time.strftime("%Y-%m-%d %H:%M"),
-                                    "ativo": cfg("ativo"), "editais": ed, "conteudo": co}, ensure_ascii=False).encode()
+                                    "ativo": cfg("ativo"), "editais": ed, "conteudo": co, "materiais": ma}, ensure_ascii=False).encode()
                 self.send_response(200)
                 self.send_header("content-type", "application/json; charset=utf-8")
                 self.send_header("content-disposition", f'attachment; filename="rota-do-edital-backup-{time.strftime("%Y%m%d")}.json"')
@@ -375,11 +455,15 @@ class Handler(BaseHTTPRequestHandler):
                     for x in b.get("conteudo", []):
                         c.execute("INSERT OR REPLACE INTO conteudo(ed,tid,dados) VALUES(?,?,?)",
                                   (x["ed"], x["tid"], json.dumps(x["dados"], ensure_ascii=False)))
+                    for x in b.get("materiais", []) or []:
+                        if ID_OK.fullmatch(str(x.get("ed", ""))) and ID_OK.fullmatch(str(x.get("id", ""))):
+                            c.execute("INSERT OR REPLACE INTO materiais(ed,id,dados) VALUES(?,?,?)",
+                                      (x["ed"], x["id"], json.dumps(x["dados"], ensure_ascii=False)))
                 ativo = b.get("ativo") or (b["editais"][0]["id"] if pacote and b.get("editais") else None)
                 if ativo:
                     cfg_set("ativo", ativo)
                 return self._json({"ok": True, "pacote": pacote, "editais": len(b.get("editais", [])),
-                                   "aulas": len(b.get("conteudo", []))})
+                                   "aulas": len(b.get("conteudo", [])), "materiais": len(b.get("materiais", []) or [])})
 
         return self._json({"erro": "rota não encontrada"}, 404)
 

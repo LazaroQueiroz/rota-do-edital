@@ -123,6 +123,44 @@ class TestAPI(unittest.TestCase):
     def test_05_arquivo_invalido(self):
         self.assertEqual(self.req("POST", "/api/backup", {"x": 1})[0], 400)
 
+    def bruto(self, metodo, rota, dados, tipo="application/pdf"):
+        r = urllib.request.Request(self.base + rota, data=dados, method=metodo, headers={"content-type": tipo})
+        try:
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                return resp.status, resp.read(), resp.headers
+        except urllib.error.HTTPError as e:
+            return e.code, e.read(), e.headers
+
+    def test_07_materiais(self):
+        self.req("PUT", "/api/editais/m1", {"id": "m1", "orgao": "Z", "materias": [], "erros": []})
+        mat = {"titulo": "Lei X", "tipo": "lei", "arquivo": "lei-x.pdf", "usos": [{"tid": "m0t0", "pag": "3-5", "quando": "consulta"}]}
+        self.assertEqual(self.req("PUT", "/api/materiais/m1/lei-x", mat)[0], 200)
+        self.assertEqual(self.req("PUT", "/api/materiais/m1/sem-titulo", {"tipo": "lei"})[0], 400)
+        self.assertEqual(self.req("PUT", "/api/materiais/m1/..%2Fx", mat)[0], 400)
+        lista = self.req("GET", "/api/materiais/m1")[1]
+        self.assertEqual([(x["id"], x["temArquivo"]) for x in lista], [("lei-x", False)])
+        # arquivo: só PDF
+        self.assertEqual(self.bruto("PUT", "/api/materiais/m1/lei-x/arquivo", b"oi")[0], 400)
+        pdf = b"%PDF-1.4\n% teste\n"
+        st, corpo, _ = self.bruto("PUT", "/api/materiais/m1/lei-x/arquivo", pdf)
+        self.assertEqual(st, 200)
+        self.assertTrue(self.req("GET", "/api/materiais/m1")[1][0]["temArquivo"])
+        st, corpo, h = self.bruto("GET", "/materiais/m1/lei-x.pdf", None)
+        self.assertEqual((st, corpo), (200, pdf))
+        self.assertIn("application/pdf", h["content-type"])
+        self.assertEqual(self.bruto("GET", "/materiais/m1/..%2F..%2Fserver.py", None)[0], 404)
+        # backup leva a descrição dos materiais e a restauração devolve
+        _, bk, _ = self.bruto("GET", "/api/backup", None)
+        bk = json.loads(bk)
+        self.assertTrue(any(x["id"] == "lei-x" for x in bk["materiais"]))
+        # apagar o material apaga o arquivo; apagar o edital limpa o resto
+        self.assertEqual(self.req("DELETE", "/api/materiais/m1/lei-x")[0], 200)
+        self.assertEqual(self.bruto("GET", "/materiais/m1/lei-x.pdf", None)[0], 404)
+        self.req("POST", "/api/backup", bk)
+        self.assertEqual(len(self.req("GET", "/api/materiais/m1")[1]), 1)
+        self.req("DELETE", "/api/editais/m1")
+        self.assertEqual(self.req("GET", "/api/materiais/m1")[1], [])
+
     def test_06_estaticos(self):
         for rota, tipo in [("/", "text/html"), ("/app.js", "text/javascript"), ("/vendor/pdf.worker.min.js", "text/javascript")]:
             with urllib.request.urlopen(self.base + rota, timeout=5) as r:
