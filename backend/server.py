@@ -104,6 +104,10 @@ def iniciar_banco():
             if coluna not in cols:
                 c.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
         c.execute("CREATE INDEX IF NOT EXISTS conteudo_ed_atualizado ON conteudo(ed, atualizado)")
+        # linhas anteriores à migração ficam com data 0; dá a elas uma data para a sincronização enxergá-las
+        agora = time.time()
+        c.execute("UPDATE conteudo SET atualizado=? WHERE atualizado=0", (agora,))
+        c.execute("UPDATE materiais SET atualizado=? WHERE atualizado=0", (agora,))
     if not cfg("codigo"):
         cfg_set("codigo", novo_codigo())
 
