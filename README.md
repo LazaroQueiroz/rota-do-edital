@@ -1,8 +1,19 @@
 # Rota do Edital
 
-Envie o edital do concurso e o app monta tudo: edital verticalizado, plano diário em blocos de 50 minutos, resumo e pegadinhas de cada tópico, questões no estilo da banca, revisões em 1, 7 e 30 dias, desempenho por matéria e caderno de erros.
+Envie o edital do concurso e o app monta tudo: edital verticalizado, plano diário em blocos de 50 minutos, resumo e pegadinhas de cada tópico, questões no estilo da banca, revisões espaçadas que se alongam conforme você acerta, treino misto de questões, desempenho por matéria (com confiança × acerto) e caderno de erros que você refaz até dominar.
 
 Roda no seu computador. Seus dados ficam em `dados/rota.db`, dentro desta pasta.
+
+## Como o app organiza o estudo
+
+As escolhas seguem o que a pesquisa em aprendizagem mostra que funciona para quem tem pouco tempo:
+
+- **Prática de testes e revisão espaçada** (Dunlosky et al., 2013; Cepeda et al., 2008): revisões que se espaçam conforme você acerta, sempre começando pelas questões.
+- **Pré-teste** (Pan & Sana, 2021): duas questões de aquecimento antes de ler o resumo de um tópico novo.
+- **Reaprendizagem sucessiva** (Rawson & Dunlosky): o caderno de erros pede para refazer cada questão sem ver o gabarito, até acertar em três dias diferentes.
+- **Confiança antes de responder** (hipercorreção, Butterfield & Metcalfe, 2001): erros cometidos com certeza ficam em destaque.
+- **Prática intercalada** (Brunmair & Richter, 2019): treino misto com questões de vários tópicos.
+- **Planos se–então** (Gollwitzer & Sheeran, 2006): um compromisso de quando e onde estudar, mostrado na aba Hoje.
 
 ## 1. Instale o Python (uma vez só)
 
@@ -32,6 +43,14 @@ Instale o Ollama em https://ollama.com e baixe um modelo, por exemplo:
     ollama pull qwen2.5:14b
 
 Modelos locais são mais fracos que o Claude, principalmente para ler editais longos, e precisam de um computador com bastante memória (16 GB de RAM ou mais para o modelo de 14b).
+
+## Materiais de apoio (PDFs)
+
+Cada tópico pode ter PDFs ligados a ele: provas anteriores da banca (com as questões daquele assunto e o gabarito oficial), leis, normas do CNJ, guias oficiais e livros gratuitos. A aula mostra **onde** (páginas) e **quando** usar cada um: aprofundar depois do resumo, questões reais na revisão ou texto oficial para consulta.
+
+Os arquivos ficam em `dados/materiais/<edital>/` e abrem no leitor de PDF do navegador, sem internet. Na aba **Materiais** você pode adicionar seus próprios PDFs e registrar o resultado de simulados.
+
+O backup em `.json` leva só a descrição dos materiais. Para levar os PDFs a outro computador, copie também a pasta `dados/materiais`.
 
 ## Sem chave de API: importar um pacote
 
@@ -95,5 +114,22 @@ A chave da API também pode vir da variável de ambiente `ANTHROPIC_API_KEY`.
 ## Limites
 
 - PDF escaneado (só imagem) não tem texto para ler. Nesse caso, cole o conteúdo programático no campo de texto.
-- Resumos e questões são escritos pela IA, sem consulta a bancos de questões oficiais. Confira a redação atual da lei antes de memorizar detalhes.
+- Resumos e questões das aulas são escritos pela IA. As questões reais ficam nas provas anteriores da aba Materiais. Confira a redação atual da lei antes de memorizar detalhes.
 - A incidência de cada tópico é uma estimativa da IA sobre o que a banca costuma cobrar.
+
+## Estrutura do projeto
+
+    server.py          servidor local (biblioteca padrão do Python), API e SQLite
+    static/            interface: index.html, app.js, app.css, fontes e pdf.js
+    tests/             testes da API (com um Ollama falso)
+    dados/             seu banco e seus PDFs (fora do git)
+    .design/style.md   decisões visuais (cores, fontes, densidade)
+    iniciar.*          atalhos para abrir o app no Windows, macOS e Linux
+
+## Testes
+
+    python -m unittest discover -s tests -v
+
+## Licença
+
+[MIT](LICENSE).
