@@ -13,5 +13,13 @@
 - Fonte mínima de 12 px; corpo 16 px; resumo 17 px com entrelinha 1,6.
 - Abas no endereço (`#hoje`, `#erros`, `#revisao/<tid>`) para o botão Voltar funcionar.
 
+## Android
+- Tema Compose gerado: `tokens.py --format compose` → `android/.../ui/theme/Tokens.kt`; ajustes (corpo 14 sp, títulos em negrito, cores semânticas) em `Tema.kt`.
+- Fonte do sistema (Roboto): os .woff2 do web não servem no Android e o orçamento de tamanho é ≤ 5 MB.
+- Barra inferior com 5 destinos rotulados (Hoje, Edital, Erros, Materiais, Mais); trilho lateral a partir de 600 dp.
+- Ação principal no alcance do polegar: botão estendido "Começar" no Hoje e barra fixa "Marcar como estudado/Concluir revisão" na aula.
+- Alvos ≥ 48 dp; etiquetas das listas com largura mínima de 92 dp para alinhar os títulos.
+- Ícones das barras do sistema seguem o tema escolhido no app.
+
 ## Preferências do usuário
 - Escolheu: clean refinado, índigo, confortável, sistema + botão.

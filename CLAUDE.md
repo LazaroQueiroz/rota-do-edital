@@ -6,32 +6,36 @@ Interface e textos em **português do Brasil**. Escreva mensagens de commit, com
 
 ## Como rodar
 
-    python server.py                 # http://localhost:8765, abre o navegador
-    python server.py --sem-navegador --porta 8799
-    python -m unittest discover -s tests -v
+    python backend/server.py                 # http://localhost:8765, abre o navegador
+    python backend/server.py --sem-navegador --porta 8799 [--rede]
+    cd backend && python -m unittest discover -s tests -v
+    cd android && ./gradlew testDebugUnitTest assembleRelease   # JDK 17 (JAVA_HOME=/usr/lib/jvm/java-17-openjdk)
 
-Não há build nem dependências: Python 3.9+ (só biblioteca padrão) e JavaScript puro no navegador.
+PC: sem build nem dependências (Python 3.9+ só com biblioteca padrão; JavaScript puro). Android: Gradle com Version Catalog.
 
-## Estrutura
+## Estrutura (monorepo)
 
-- `server.py` — servidor HTTP (ThreadingHTTPServer), API `/api/*`, SQLite em `dados/rota.db`, chamadas de IA (Anthropic ou Ollama).
-- `static/index.html` — casca da página.
-- `static/app.js` — todo o front: estado global `S`, `render()` gera HTML por string, eventos por delegação via `data-act`.
-- `static/app.css` — tokens gerados (preset clean, índigo) em `:root` com tema escuro e alternador manual (`data-theme`); fontes locais em `static/fonts/`. Decisões visuais em `.design/style.md`.
-- `static/vendor/` — pdf.js 3.11.174 (leitura de PDF no navegador). Não trocar por CDN.
-- `tests/` — testes da API com um Ollama falso.
-- `dados/` — banco do usuário. Nunca versionar (está no `.gitignore`).
+- `contract/openapi.yaml` — **fonte da verdade da API /v1**; `contract/tokens.json` — design tokens (web: `web/app.css`; Android: `ui/theme/Tokens.kt`, gerados por `ui-ux/tokens.py`). Mude o contrato antes de mudar uma rota.
+- `backend/server.py` — servidor HTTP (ThreadingHTTPServer), API `/v1/*` (e `/api/*` por compatibilidade), SQLite em `dados/rota.db`, IA (Anthropic ou Ollama), pareamento e autenticação de aparelhos.
+- `backend/mesclagem.py` — mesclagem a três vias do edital entre aparelhos (testes em `backend/tests/test_mesclagem.py`).
+- `web/index.html`, `web/app.js` (estado global `S`, `render()` por string, eventos via `data-act`), `web/app.css` (tokens, tema escuro, `data-theme`), `web/fonts/` (2 famílias), `web/vendor/` (pdf.js 3.11.174, carregado só ao ler PDF; não trocar por CDN).
+- `android/` — app nativo: Kotlin + Compose + Material 3, uma Activity, Navigation Compose, Room (offline), DataStore + Keystore (token), WorkManager (sincronização), OkHttp + kotlinx.serialization (cliente /v1 escrito à mão). Regras de estudo em `dominio/Estudo.kt` (espelham `web/app.js`; mudou lá, mude aqui e nos testes).
+- `dados/` — banco e PDFs do usuário. Nunca versionar.
 
 ## Regras do projeto
 
 1. **Offline primeiro.** Nada de CDN, fontes remotas ou chamadas externas no front. A única saída para a internet é a API da Anthropic, feita pelo `server.py`.
-2. **Sem dependências.** Servidor só com a biblioteca padrão; front sem framework e sem bundler. Se algo parecer exigir uma biblioteca, pergunte antes.
+2. **Sem dependências no PC.** Servidor só com a biblioteca padrão; front web sem framework e sem bundler. No Android, só as bibliotecas do `libs.versions.toml` (Compose, Room, DataStore, WorkManager, OkHttp, kotlinx.serialization, splashscreen, profileinstaller). Para qualquer outra, pergunte antes.
 3. **Dados do usuário são sagrados.** Mudanças no formato do edital ou do conteúdo precisam ser compatíveis com bancos e backups antigos (campos novos opcionais, com valor padrão no código).
 4. **QConcursos:** o app não acessa a conta do usuário nem extrai conteúdo da plataforma (termos de uso). O desempenho de lá entra só por registro manual (`t.qc`).
 5. **Escape tudo** que vem de IA, PDF ou usuário com `esc()` antes de entrar no HTML.
-6. Ao mudar a API, atualize `tests/test_api.py` e rode os testes.
+6. Ao mudar a API, atualize `contract/openapi.yaml` e `backend/tests/test_api.py` e rode os testes. Só mudanças compatíveis em `/v1` (campos novos opcionais): apps antigos continuam instalados.
+7. **Sincronização sem polling:** o Android sincroniza via WorkManager (ao abrir, ~30 s após mudanças e a cada 1 h em Wi-Fi). Quem grava o edital envia `base_rev` + `base`; o servidor mescla. Nunca sobrescreva o edital inteiro de outro aparelho.
+8. Android: I/O e rede sempre fora da main thread (StrictMode ligado no debug).
 
-## API (server.py)
+## API (backend/server.py, contrato em contract/openapi.yaml)
+
+Rotas em `/v1/...` (as mesmas em `/api/...`). De outro aparelho exigem `Authorization: Bearer` (app) ou cookie `rota_sessao` (navegador). Erros em problem+json com `code`; GETs com ETag.
 
 | Método e rota | Uso |
 |---|---|
@@ -48,6 +52,15 @@ Não há build nem dependências: Python 3.9+ (só biblioteca padrão) e JavaScr
 | `PUT /api/materiais/<ed>/<id>/arquivo` | corpo bruto `application/pdf` (até 60 MB), salvo em `dados/materiais/<ed>/<id>.pdf` |
 | `GET /materiais/<ed>/<id>.pdf` | serve o PDF local (abre no leitor do navegador; use `#page=N`) |
 | `GET/POST /api/backup` | exporta tudo / importa backup ou pacote (inclui a descrição dos materiais, não os PDFs) |
+| `GET /v1/health` | servidor no ar (sem autenticação) |
+| `POST /v1/dispositivos` | `{codigo, nome}` → `{id, token}` (pareamento; limite de 10 tentativas/10 min por IP) |
+| `POST /v1/sessao` | `{codigo}` → cookie de sessão para o navegador de outro aparelho |
+| `GET /v1/pareamento`, `POST /v1/pareamento/novo`, `DELETE /v1/dispositivos/<id>` | só do próprio PC: código, endereço, aparelhos |
+| `GET /v1/editais/<id>/rev` | `{rev, doc}` |
+| `POST /v1/editais/<id>/mesclar` | `{base_rev, base, doc}` → `{rev, mesclado, doc?}` |
+| `POST /v1/mesclar` | `{base, local, remoto}` → `{doc}` (sem gravar) |
+| `GET /v1/sync/estado` | versões de editais, aulas e materiais |
+| `GET /v1/conteudo/<ed>/alteracoes?desde=&cursor=&limit=` | aulas alteradas, paginadas por cursor |
 
 Importação com `"tipo": "pacote"` não sobrescreve um edital existente (preserva o progresso); só adiciona ou atualiza aulas.
 

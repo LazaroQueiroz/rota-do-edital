@@ -94,10 +94,27 @@ Para deixar o edital inteiro pronto antes de ficar sem conexão, vá em **Ajuste
 
 Sem internet e com a API da Anthropic, só não dá para gerar aulas novas nem enviar outro edital. Com o Ollama tudo funciona offline.
 
-## Acessar pelo celular ou outro computador
+## App Android (sincronizado com o PC)
 
-- **Na mesma rede Wi-Fi:** abra `iniciar-na-rede.bat` (Windows) ou rode `./iniciar.sh --rede`. A janela mostra um endereço como `http://192.168.0.10:8765`; abra esse endereço no celular. O app não tem senha, então use isso só em redes de confiança, como a de casa.
-- **De qualquer lugar pela internet:** a forma mais segura é instalar o Tailscale (https://tailscale.com) no computador e no celular e abrir o endereço do Tailscale do computador na porta 8765. Não recomendo abrir a porta no roteador, porque o app não tem login.
+O app Android (pasta `android/`) é nativo: guarda edital, progresso, aulas e PDFs no celular, funciona sem internet e sincroniza com o PC pelo Wi-Fi de casa. O que você estudar em qualquer um dos dois é **mesclado**, sem perder nada: as questões dos dois lados somam, um tópico estudado continua estudado, as revisões feitas continuam feitas e os erros entram no mesmo caderno.
+
+1. No PC, abra o app em modo rede: `iniciar-na-rede.bat` (Windows) ou `./iniciar.sh --rede`.
+2. No PC, vá em **Ajustes → Celular** e anote o endereço (ex.: `192.168.0.10:8765`) e o código de 6 letras.
+3. No celular, abra o Rota do Edital, digite o endereço e o código e toque em **Conectar e sincronizar**.
+
+Na primeira vez vêm o edital, as aulas e depois os PDFs (cerca de 76 MB no edital do TJPB), em segundo plano. Depois disso o app sincroniza sozinho ao abrir, pouco depois de cada estudo e a cada hora, sempre em Wi-Fi. O código só serve para parear: cada aparelho recebe uma chave própria, guardada cifrada no Android Keystore, e você pode desconectá-lo em **Ajustes → Celular** no PC.
+
+Para instalar a partir do código (precisa do Android SDK e do JDK 17):
+
+    cd android
+    ./gradlew assembleRelease
+    adb install -r app/build/outputs/apk/release/app-release.apk
+
+Gerar aulas e ler editais novos continua no PC, porque usa a IA configurada lá.
+
+## Acessar pelo navegador de outro aparelho
+
+Com o PC em modo rede, abra no navegador o endereço mostrado (ex.: `http://192.168.0.10:8765`). Na primeira vez o app pede o código de pareamento. Use só em redes de confiança, como a de casa. Para acessar de fora de casa, prefira o Tailscale (https://tailscale.com) a abrir portas no roteador.
 
 ## Backup e outro computador
 
@@ -105,9 +122,9 @@ Em **Ajustes → Backup**, baixe um arquivo `.json` com todos os editais, progre
 
 ## Opções do servidor
 
-    python server.py --porta 9000       # outra porta
-    python server.py --rede             # aceita outros aparelhos da rede
-    python server.py --sem-navegador    # não abre o navegador sozinho
+    python backend/server.py --porta 9000       # outra porta
+    python backend/server.py --rede             # aceita outros aparelhos da rede (celular)
+    python backend/server.py --sem-navegador    # não abre o navegador sozinho
 
 A chave da API também pode vir da variável de ambiente `ANTHROPIC_API_KEY`.
 
@@ -119,16 +136,19 @@ A chave da API também pode vir da variável de ambiente `ANTHROPIC_API_KEY`.
 
 ## Estrutura do projeto
 
-    server.py          servidor local (biblioteca padrão do Python), API e SQLite
-    static/            interface: index.html, app.js, app.css, fontes e pdf.js
-    tests/             testes da API (com um Ollama falso)
+    backend/           servidor local (só biblioteca padrão do Python), API /v1, SQLite e mesclagem
+    backend/tests/     testes da API (com um Ollama falso) e da mesclagem
+    web/               interface do PC: index.html, app.js, app.css, fontes e pdf.js
+    android/           app Android nativo (Kotlin, Jetpack Compose, Material 3)
+    contract/          openapi.yaml (contrato da API) e tokens.json (cores, tipos, espaços)
     dados/             seu banco e seus PDFs (fora do git)
     .design/style.md   decisões visuais (cores, fontes, densidade)
     iniciar.*          atalhos para abrir o app no Windows, macOS e Linux
 
 ## Testes
 
-    python -m unittest discover -s tests -v
+    cd backend && python -m unittest discover -s tests -v
+    cd android && ./gradlew testDebugUnitTest
 
 ## Licença
 
