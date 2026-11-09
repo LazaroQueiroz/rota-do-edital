@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- O servidor do PC fala HTTP na rede local (IP muda de casa para casa), por isso o texto
+     claro é permitido. Os dados só saem do app com o token do aparelho, obtido no pareamento. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

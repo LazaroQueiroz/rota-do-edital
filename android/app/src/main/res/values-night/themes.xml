@@ -1,0 +1,6 @@
+<resources>
+    <color name="splash_bg">#131417</color>
+    <style name="Theme.Rota" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/splash_bg</item>
+    </style>
+</resources>
