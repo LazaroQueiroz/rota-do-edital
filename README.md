@@ -4,6 +4,16 @@ Envie o edital do concurso e o app monta tudo: edital verticalizado, plano diár
 
 Roda no seu computador. Seus dados ficam em `dados/rota.db`, dentro desta pasta.
 
+## Baixar
+
+Na página de [Releases](https://github.com/LazaroQueiroz/rota-do-edital/releases/latest):
+
+- **Windows:** `RotaDoEdital-*-windows.zip`. Extraia e dê dois cliques em `iniciar.bat` (já vem com Python, nada para instalar).
+- **Linux:** `RotaDoEdital-*-linux.tar.gz`. Extraia e rode `./iniciar.sh` (precisa do Python 3.9+).
+- **Android:** `RotaDoEdital-*.apk`. Ao instalar, o Android pede permissão para "fontes desconhecidas".
+
+Os pacotes já trazem o conteúdo do edital do TJPB 2026 (TI) com as aulas e os PDFs oficiais de apoio, sem nenhum progresso de estudo.
+
 ## Como o app organiza o estudo
 
 As escolhas seguem o que a pesquisa em aprendizagem mostra que funciona para quem tem pouco tempo:
